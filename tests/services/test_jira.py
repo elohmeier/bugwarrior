@@ -1,5 +1,6 @@
 from collections import namedtuple
 from datetime import UTC, datetime
+import socket
 from unittest import mock
 
 import pytest
@@ -7,7 +8,7 @@ import pytest
 from bugwarrior.collect import TaskConstructor
 from bugwarrior.config import validation
 from bugwarrior.config.load import format_config
-from bugwarrior.services.jira import JiraExtraFields, JiraService
+from bugwarrior.services.jira import JiraExtraFields, JiraService, _patch_dns_resolve
 
 SERVICE_CLASS = JiraService
 
@@ -74,6 +75,22 @@ class FakeJiraClient:
 
     def comments(self, *args, **kwargs):
         return None
+
+
+class TestDnsResolve:
+    def test_patch_dns_resolve(self, monkeypatch):
+        monkeypatch.setattr(socket, "getaddrinfo", socket.getaddrinfo)
+        _patch_dns_resolve("example.invalid", "127.0.0.1")
+        results = socket.getaddrinfo("example.invalid", 443)
+        addresses = [r[4][0] for r in results]
+        assert all(addr == "127.0.0.1" for addr in addresses)
+
+    def test_patch_dns_resolve_passthrough(self, monkeypatch):
+        monkeypatch.setattr(socket, "getaddrinfo", socket.getaddrinfo)
+        _patch_dns_resolve("example.invalid", "127.0.0.1")
+        results = socket.getaddrinfo("localhost", 80)
+        addresses = [r[4][0] for r in results]
+        assert any(addr in ("127.0.0.1", "::1") for addr in addresses)
 
 
 class TestJiraService:

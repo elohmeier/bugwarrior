@@ -4,9 +4,11 @@ import datetime
 from functools import reduce
 import logging
 import operator
+import socket
 import sys
 import typing
 from typing import Any
+from urllib.parse import urlparse
 
 from jira.client import JIRA as BaseJIRA
 from jira.exceptions import JIRAError
@@ -92,6 +94,7 @@ class JiraConfig(config.ServiceConfig):
     import_sprints_as_tags: bool = False
     label_template: str = "{{label}}"
     query: str = ""
+    resolve: str = ""
     use_cookies: bool = False
     verify_ssl: bool = True
     version: int = 5
@@ -119,6 +122,34 @@ class ObliviousCookieJar(RequestsCookieJar):
     def copy(self) -> "ObliviousCookieJar":
         """Make sure to return an instance of the correct class on copying."""
         return ObliviousCookieJar()
+
+
+def _fix_resilient_session_pickle() -> None:
+    """Workaround for ResilientSession losing attributes after pickling.
+
+    requests.Session.__reduce__ doesn't preserve subclass attributes like
+    max_retries, max_retry_delay, and timeout. This is triggered when
+    bugwarrior spawns multiprocessing workers.
+    """
+    from jira.resilientsession import ResilientSession
+
+    if hasattr(ResilientSession, "_bugwarrior_patched"):
+        return
+
+    _EXTRA_ATTRS = ("timeout", "max_retries", "max_retry_delay")
+
+    def __getstate__(self: ResilientSession) -> dict[str, Any]:
+        state = self.__dict__.copy()
+        for attr in _EXTRA_ATTRS:
+            state.setdefault(attr, getattr(self, attr, None))
+        return state
+
+    def __setstate__(self: ResilientSession, state: dict[str, Any]) -> None:
+        self.__dict__.update(state)
+
+    setattr(ResilientSession, "__getstate__", __getstate__)
+    setattr(ResilientSession, "__setstate__", __setstate__)
+    setattr(ResilientSession, "_bugwarrior_patched", True)
 
 
 class JIRA(BaseJIRA):
@@ -340,6 +371,23 @@ class JiraIssue(Issue):
         return self.record["fields"]["issuetype"]["name"]
 
 
+def _patch_dns_resolve(hostname: str | None, address: str) -> None:
+    """Resolve hostname to a specific IP address, like curl --resolve."""
+    _original_getaddrinfo = socket.getaddrinfo
+
+    def _patched_getaddrinfo(
+        host: str | bytes | None,
+        port: str | bytes | int | None,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        if host == hostname:
+            return _original_getaddrinfo(address, port, *args, **kwargs)
+        return _original_getaddrinfo(host, port, *args, **kwargs)
+
+    setattr(socket, "getaddrinfo", _patched_getaddrinfo)
+
+
 class JiraService(Service[JiraIssue]):
     API_VERSION = 2.0
     ISSUE_CLASS = JiraIssue
@@ -362,6 +410,10 @@ class JiraService(Service[JiraIssue]):
         self.query = self.config.query or default_query
 
         if not _skip_server:
+            _fix_resilient_session_pickle()
+            if self.config.resolve:
+                hostname = urlparse(self.config.base_uri).hostname
+                _patch_dns_resolve(hostname, self.config.resolve)
             self.jira = self._build_jira_client()
 
         self.sprint_field_names = []
@@ -408,7 +460,20 @@ class JiraService(Service[JiraIssue]):
             issue_obj.get_url(),
         )
 
+    def _apply_workarounds(self) -> None:
+        """Re-apply patches that are lost when the service is pickled
+        for multiprocessing workers."""
+        _fix_resilient_session_pickle()
+        if self.config.resolve:
+            hostname = urlparse(self.config.base_uri).hostname
+            _patch_dns_resolve(hostname, self.config.resolve)
+        session = getattr(getattr(self, "jira", None), "_session", None)
+        if session is not None and not hasattr(session, "max_retries"):
+            session.max_retries = 3
+            session.max_retry_delay = 60
+
     def issues(self) -> Iterator[JiraIssue]:
+        self._apply_workarounds()
         try:
             cases = self.jira.search_issues(self.query, maxResults=False)
         except JIRAError:  # Jira Cloud
