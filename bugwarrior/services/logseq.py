@@ -1,11 +1,12 @@
 from collections.abc import Iterator
-from datetime import datetime
+from datetime import UTC, datetime
 import logging
 import re
 import sys
 import typing
 from typing import Any
 
+from dateutil.tz import tzlocal
 import requests
 
 from bugwarrior import config
@@ -279,7 +280,12 @@ class LogseqIssue(Issue):
             return None
 
         try:
-            return datetime.strptime(date, date_format)
+            # Logseq dates are local wall time; Taskwarrior exports them in UTC.
+            return (
+                datetime.strptime(date, date_format)
+                .replace(tzinfo=tzlocal())
+                .astimezone(UTC)
+            )
         except ValueError:
             log.warning(f"Could not parse date {date} from {scheduled}")
         return None
@@ -289,8 +295,9 @@ class LogseqIssue(Issue):
 
     def to_taskwarrior(self) -> dict[str, Any]:
         annotations, scheduled_date, deadline_date = self.get_annotations_from_content()
+        someday = self.SOMEDAY.replace(tzinfo=tzlocal()).astimezone(UTC)
         wait_date = min(
-            [d for d in [scheduled_date, deadline_date, self.SOMEDAY] if d is not None]
+            d for d in [scheduled_date, deadline_date, someday] if d is not None
         )
         return {
             "project": self.extra["graph"],
@@ -301,7 +308,7 @@ class LogseqIssue(Issue):
             "scheduled": scheduled_date,
             "wait": wait_date if self._is_waiting() else None,
             "status": self.STATE_MAP[self.get_logseq_state()],
-            self.ID: int(self.record["id"]),
+            self.ID: str(int(self.record["id"])),
             self.UUID: self.record["uuid"],
             self.STATE: self.record["marker"],
             self.TITLE: self.get_formatted_title(),
