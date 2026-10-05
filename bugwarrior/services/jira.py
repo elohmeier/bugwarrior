@@ -1,19 +1,23 @@
 from collections.abc import Iterator
+from contextlib import contextmanager
 import dataclasses
 import datetime
 from functools import reduce
 import logging
 import operator
+import re
 import socket
 import sys
 import typing
 from typing import Any
 from urllib.parse import urlparse
+import warnings
 
 from jira.client import JIRA as BaseJIRA
 from jira.exceptions import JIRAError
 from pydantic import BeforeValidator, model_validator
 from requests.cookies import RequestsCookieJar
+from urllib3.exceptions import InsecureRequestWarning
 
 from bugwarrior import config
 from bugwarrior.services import Issue, Service
@@ -409,24 +413,38 @@ class JiraService(Service[JiraIssue]):
         )
         self.query = self.config.query or default_query
 
-        if not _skip_server:
-            _fix_resilient_session_pickle()
-            if self.config.resolve:
-                hostname = urlparse(self.config.base_uri).hostname
-                _patch_dns_resolve(hostname, self.config.resolve)
-            self.jira = self._build_jira_client()
+        with self._suppress_insecure_request_warnings():
+            if not _skip_server:
+                _fix_resilient_session_pickle()
+                if self.config.resolve:
+                    hostname = urlparse(self.config.base_uri).hostname
+                    _patch_dns_resolve(hostname, self.config.resolve)
+                self.jira = self._build_jira_client()
 
-        self.sprint_field_names = []
-        if self.config.import_sprints_as_tags:
-            field_names = [
-                field for field in self.jira.fields() if field["name"] == "Sprint"
-            ]
-            if len(field_names) < 1:
-                log.warning("No sprint custom field found.  Ignoring sprints.")
-                self.config.import_sprints_as_tags = False
-            else:
-                log.info(f"Found {len(field_names)} distinct sprint fields.")
-                self.sprint_field_names = [field["id"] for field in field_names]
+            self.sprint_field_names = []
+            if self.config.import_sprints_as_tags:
+                field_names = [
+                    field for field in self.jira.fields() if field["name"] == "Sprint"
+                ]
+                if len(field_names) < 1:
+                    log.warning("No sprint custom field found.  Ignoring sprints.")
+                    self.config.import_sprints_as_tags = False
+                else:
+                    log.info(f"Found {len(field_names)} distinct sprint fields.")
+                    self.sprint_field_names = [field["id"] for field in field_names]
+
+    @contextmanager
+    def _suppress_insecure_request_warnings(self) -> Iterator[None]:
+        """Honor disabled verification without hiding warnings for other hosts."""
+        with warnings.catch_warnings():
+            if not self.config.verify_ssl:
+                hostname = re.escape(urlparse(self.config.base_uri).hostname or "")
+                warnings.filterwarnings(
+                    "ignore",
+                    message=f"Unverified HTTPS request is being made to host '{hostname}'\\.",
+                    category=InsecureRequestWarning,
+                )
+            yield
 
     def _build_jira_client(self) -> JIRA:
         jira_options = {
@@ -474,17 +492,18 @@ class JiraService(Service[JiraIssue]):
 
     def issues(self) -> Iterator[JiraIssue]:
         self._apply_workarounds()
-        try:
-            cases = self.jira.search_issues(self.query, maxResults=False)
-        except JIRAError:  # Jira Cloud
-            cases = self.jira.enhanced_search_issues(self.query, maxResults=False)
+        with self._suppress_insecure_request_warnings():
+            try:
+                cases = self.jira.search_issues(self.query, maxResults=False)
+            except JIRAError:  # Jira Cloud
+                cases = self.jira.enhanced_search_issues(self.query, maxResults=False)
 
-        for case in cases:
-            issue = self.get_issue_for_record(
-                case.raw, extra={"sprint_field_names": self.sprint_field_names}
-            )
-            extra: dict[str, Any] = {"body": self.body(issue)}
-            if self.config.version > 4:
-                extra["annotations"] = self.annotations(case, issue)
-            issue.extra.update(extra)
-            yield issue
+            for case in cases:
+                issue = self.get_issue_for_record(
+                    case.raw, extra={"sprint_field_names": self.sprint_field_names}
+                )
+                extra: dict[str, Any] = {"body": self.body(issue)}
+                if self.config.version > 4:
+                    extra["annotations"] = self.annotations(case, issue)
+                issue.extra.update(extra)
+                yield issue

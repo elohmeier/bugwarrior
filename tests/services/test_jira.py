@@ -2,8 +2,10 @@ from collections import namedtuple
 from datetime import UTC, datetime
 import socket
 from unittest import mock
+import warnings
 
 import pytest
+from urllib3.exceptions import InsecureRequestWarning
 
 from bugwarrior.collect import TaskConstructor
 from bugwarrior.config import validation
@@ -109,6 +111,67 @@ class TestJiraService:
                 ],
             },
         }
+
+    @pytest.mark.parametrize("verify_ssl", [True, False])
+    def test_tls_warnings_during_connection_and_collection(self, config, verify_ssl):
+        config["myservice"].update(verify_ssl=verify_ssl, import_sprints_as_tags=True)
+        conf = validation.validate_config(
+            format_config(config), "general", "configpath"
+        )
+        client = mock.Mock()
+        message = "Unverified HTTPS request is being made to host 'example.com'."
+
+        def warn_and_return(result):
+            def call(*args, **kwargs):
+                warnings.warn(message, InsecureRequestWarning, stacklevel=2)
+                return result
+
+            return call
+
+        client.fields.side_effect = warn_and_return(
+            [{"name": "Sprint", "id": "sprint"}]
+        )
+        client.search_issues.side_effect = warn_and_return([])
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            with mock.patch(
+                "bugwarrior.services.jira.JIRA", side_effect=warn_and_return(client)
+            ):
+                service = JiraService(conf.service_configs[0], conf.main)
+            # Collection installs its own filter, as it runs in a spawned worker.
+            assert list(service.issues()) == []
+            assert len(caught) == (3 if verify_ssl else 0)
+
+            # The filter must not survive the Jira request scope.
+            warnings.warn(message, InsecureRequestWarning, stacklevel=2)
+            assert caught[-1].category is InsecureRequestWarning
+            assert len(caught) == (4 if verify_ssl else 1)
+
+    def test_tls_warning_suppression_keeps_other_warnings(self, config):
+        config["myservice"]["verify_ssl"] = False
+        conf = validation.validate_config(
+            format_config(config), "general", "configpath"
+        )
+        service = JiraService(conf.service_configs[0], conf.main, _skip_server=True)
+        service.jira = mock.Mock()
+        message = "Unverified HTTPS request is being made to host 'example.com'."
+        other_host = "Unverified HTTPS request is being made to host 'exampleXcom'."
+
+        def search(*args, **kwargs):
+            warnings.warn(message, InsecureRequestWarning, stacklevel=2)
+            warnings.warn(other_host, InsecureRequestWarning, stacklevel=2)
+            warnings.warn(message, UserWarning, stacklevel=2)
+            return []
+
+        service.jira.search_issues.side_effect = search
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            assert list(service.issues()) == []
+
+        assert [(str(w.message), w.category) for w in caught] == [
+            (other_host, InsecureRequestWarning),
+            (message, UserWarning),
+        ]
 
     def test_body_length_no_limit(self, config):
         description = "A very short issue body.  Fixes #828."

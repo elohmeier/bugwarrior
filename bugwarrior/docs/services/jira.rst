@@ -100,6 +100,9 @@ If you want to ignore verifying the SSL certificate, set:
 
     jira.verify_ssl = False
 
+When verification is disabled, ``InsecureRequestWarning`` messages for the
+configured Jira host are suppressed. Other warnings remain visible.
+
 Import Labels and Sprints as Tags
 +++++++++++++++++++++++++++++++++
 
