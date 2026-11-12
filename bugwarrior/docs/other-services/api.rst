@@ -1,4 +1,4 @@
-Python API v2.0
+Python API v2.1
 ===============
 
 The interfaces documented here are considered stable. All other interfaces
@@ -18,6 +18,12 @@ warning, release notes, or semantic version bumping.
 
 Changelog
 ---------
+
+v2.1
+~~~~
+
+- Added ``Service.COMPLETE_MISSING`` (default ``True``). Set it to ``False``
+  when completion is supplied explicitly and absent records should be retained.
 
 v2.0
 ~~~~

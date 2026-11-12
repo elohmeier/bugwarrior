@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+    <key>CFBundleIdentifier</key><string>org.bugwarrior.reminders-reader</string>
+    <key>CFBundleName</key><string>Bugwarrior Reminders Reader</string>
+    <key>NSRemindersFullAccessUsageDescription</key>
+    <string>Read reminders and completed history for import into Taskwarrior. This helper never changes reminders.</string>
+</dict></plist>

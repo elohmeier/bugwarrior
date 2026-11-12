@@ -37,7 +37,7 @@ CACHE_REGION = dogpile.cache.make_region().configure(
 # spec will cause breakages with older bugwarrior releases.
 # MINOR versions signal extensions of the spec which enhance future releases of
 # bugwarrior without breaking past releases.
-LATEST_API_VERSION = 2.0
+LATEST_API_VERSION = 2.1
 
 
 class URLShortener:
@@ -269,6 +269,10 @@ class Service(abc.ABC, Generic[T_Issue]):
     ISSUE_CLASS: type[T_Issue]
     #: Which class defines this service's configuration options?
     CONFIG_SCHEMA: type[schema.ServiceConfig]
+
+    #: Complete local tasks absent from a successful collection. Services that
+    #: import explicit completion states or archival snapshots can opt out.
+    COMPLETE_MISSING = True
 
     def __init__(
         self, config: schema.ServiceConfig, main_config: schema.MainSectionConfig

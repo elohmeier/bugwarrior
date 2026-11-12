@@ -9,6 +9,7 @@ It currently supports the following remote resources:
 
 .. class:: services
 
+- `Apple Reminders <https://www.apple.com/reminders/>`_
 - `Azure DevOps <https://azure.microsoft.com/en-us/services/devops/>`_
 - `Bitbucket <https://bitbucket.org>`_
 - `Bugzilla <https://www.bugzilla.org/>`_

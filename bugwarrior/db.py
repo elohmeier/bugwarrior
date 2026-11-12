@@ -5,12 +5,12 @@ import re
 import subprocess
 from typing import TYPE_CHECKING, Any
 
-from taskw import TaskWarriorShellout
 from taskw.exceptions import TaskwarriorError
 
 from bugwarrior.collect import CollectedIssue, CollectionErrorData
 from bugwarrior.config import get_service
 from bugwarrior.notifications import send_notification
+from bugwarrior.taskwarrior import TaskWarriorShellout
 
 if TYPE_CHECKING:
     from bugwarrior.config.schema import MainSectionConfig
@@ -188,6 +188,7 @@ def synchronize(
     issue_updates = {"new": [], "existing": [], "changed": [], "closed": []}
 
     issue_map = {}  # unique identifier -> issue
+    collected_issues = []
     successful_config_map = {
         service_config.target: service_config for service_config in conf.service_configs
     }
@@ -195,6 +196,13 @@ def synchronize(
     for issue in issue_generator:
         if isinstance(issue, CollectionErrorData):
             successful_config_map.pop(issue.target)
+            continue
+        collected_issues.append(issue)
+
+    for issue in collected_issues:
+        # Discard partial results from failed targets before de-duplicating:
+        # they must not shadow a successful target's copy of the same issue.
+        if issue.target not in successful_config_map:
             continue
 
         # De-duplicate issues coming in
@@ -224,6 +232,11 @@ def synchronize(
                 except UnicodeDecodeError:
                     log.warning(f"Failed to interpret {key!r} as utf-8")
 
+        # Use Taskwarrior's explicit completed state so the historical end date
+        # is preserved, rather than issuing a second `done` command later.
+        if issue.get("end") and issue.get("status") != "deleted":
+            issue["status"] = "completed"
+
         service_config = successful_config_map[target]
 
         try:
@@ -238,7 +251,9 @@ def synchronize(
             seen_uuids.add(existing_taskwarrior_uuid)
             _, task = tw.get_task(uuid=existing_taskwarrior_uuid)
 
-            if task["status"] == "completed":
+            if task["status"] == "completed" and not (
+                issue.get("end") or issue.get("status") in ("completed", "deleted")
+            ):
                 # Reopen task
                 task["status"] = "pending"
                 task["end"] = None
@@ -281,8 +296,6 @@ def synchronize(
 
         try:
             new_task = tw.task_add(**issue)
-            if issue.get("end"):
-                tw.task_done(uuid=new_task["uuid"])
         except TaskwarriorError as e:
             log.exception(f"Unable to add task: {e.stderr}")
         else:
@@ -307,9 +320,7 @@ def synchronize(
             continue
 
         try:
-            _, updated_task = tw.task_update(issue)
-            if issue.get("end"):
-                tw.task_done(uuid=updated_task["uuid"])
+            tw.task_update(issue)
         except TaskwarriorError as e:
             log.exception(f"Unable to modify task: {e.stderr}")
 
@@ -317,7 +328,9 @@ def synchronize(
     succeeded_service_task_uuids = get_managed_task_uuids(
         tw,
         build_unique_key_sets(
-            service_config.service for service_config in successful_config_map.values()
+            service_config.service
+            for service_config in successful_config_map.values()
+            if getattr(get_service(service_config.service), "COMPLETE_MISSING", True)
         ),
     )
     issue_updates["closed"] = list(succeeded_service_task_uuids - seen_uuids)

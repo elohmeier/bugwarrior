@@ -1,11 +1,12 @@
 import copy
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
 import taskw.task
 
 from bugwarrior import db
-from bugwarrior.collect import CollectedIssue
+from bugwarrior.collect import CollectedIssue, CollectionErrorData
 from bugwarrior.config import schema
 from bugwarrior.config.validation import Config
 
@@ -219,6 +220,49 @@ class TestSynchronize:
                 }
             ],
         }
+
+    @pytest.mark.parametrize("explicit_status", [False, True])
+    def test_historical_completion(self, bwconfig, tw, explicit_status):
+        issue = {
+            "description": "Historical synthetic task",
+            "dumburl": "https://example.com/history",
+            "tags": [],
+            "entry": datetime(2020, 1, 2, tzinfo=UTC),
+            "end": datetime(2021, 2, 3, tzinfo=UTC),
+        }
+        if explicit_status:
+            issue["status"] = "completed"
+        for _ in range(2):
+            self.synchronize(bwconfig, [issue])
+            tasks = tw.load_tasks()
+            assert tasks["pending"] == []
+            assert len(tasks["completed"]) == 1
+            assert tasks["completed"][0]["end"] == "20210203T000000Z"
+
+        # Updating a completed task must also preserve historical end dates.
+        issue["description"] = "Updated historical task"
+        self.synchronize(bwconfig, [issue])
+        assert tw.load_tasks()["completed"][0]["end"] == "20210203T000000Z"
+
+    def test_failed_partial_collection_is_discarded(self, bwconfig, tw):
+        issue = {
+            "description": "Original",
+            "dumburl": "https://example.com",
+            "tags": [],
+        }
+        self.synchronize(bwconfig, [issue])
+        before = tw.load_tasks()
+        issue["description"] = "Partial update"
+        db.synchronize(
+            iter(
+                [
+                    CollectedIssue(issue, "my_service", "abcd"),
+                    CollectionErrorData("Failed after yielding an issue", "my_service"),
+                ]
+            ),
+            bwconfig,
+        )
+        assert tw.load_tasks() == before
 
 
 class TestUDAs:

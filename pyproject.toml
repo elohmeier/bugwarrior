@@ -55,8 +55,10 @@ bugwarrior = "bugwarrior:cli"
 bugwarrior-pull = "bugwarrior:pull"
 bugwarrior-vault = "bugwarrior:vault"
 bugwarrior-uda = "bugwarrior:uda"
+bugwarrior-reminders-helper = "bugwarrior.services.applereminders:build_helper"
 
 [project.entry-points."bugwarrior.service"]
+applereminders = "bugwarrior.services.applereminders:AppleRemindersService"
 azuredevops = "bugwarrior.services.azuredevops:AzureDevopsService"
 deck = "bugwarrior.services.deck:NextcloudDeckService"
 gitbug = "bugwarrior.services.gitbug:GitBugService"
@@ -131,6 +133,9 @@ filterwarnings = [
 
 [tool.setuptools.packages.find]
 include = ["bugwarrior*"]
+
+[tool.setuptools.package-data]
+bugwarrior = ["services/_applereminders/*.swift", "services/_applereminders/*.plist"]
 
 [tool.ty.environment]
 python-version = "3.13"

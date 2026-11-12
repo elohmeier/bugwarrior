@@ -1,6 +1,16 @@
 Unreleased
 ----------
 
+Apple Reminders and Taskwarrior 3
+================================
+
+- Added the macOS ``applereminders`` service and a bundled read-only EventKit
+  helper, including completed history and explicit completion handling.
+- Preserve historical completion dates when creating and updating tasks.
+- Write Taskwarrior 3 tasks through JSON to preserve literal titles, metadata,
+  annotations, and dependencies. Taskwarrior 2 keeps the existing taskw writer.
+- Discard partial collections from failed targets before synchronization.
+
 Highlights
 ==========
 - Deprecation of the --interactive flag. All invocations are now interactive. (https://github.com/GothenburgBitFactory/bugwarrior/pull/1204)
