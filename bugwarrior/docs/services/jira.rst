@@ -55,6 +55,34 @@ The following default configuration is used:
     jira.version = 5
 
 
+Separate Browser Links from the API Connection
+++++++++++++++++++++++++++++++++++++++++++++++
+
+By default, issue links use ``base_uri``, which is also used for API requests.
+If you connect through a tunnel or proxy, set ``web_base_uri`` to the address
+you use in your browser:
+
+.. config::
+    :fragment: jira
+
+    jira.base_uri = https://jira.example.org:9994
+    jira.web_base_uri = https://jira.example.org
+
+This generates links such as ``https://jira.example.org/browse/PROJECT-123``
+in the ``jiraurl`` UDA, task descriptions, and link annotations. API requests
+still use ``base_uri``. Include any Jira context path in ``web_base_uri``;
+trailing slashes are removed automatically. If ``web_base_uri`` is omitted,
+links continue to use ``base_uri``.
+
+.. warning::
+
+   Bugwarrior identifies existing Jira tasks by ``jiraurl``. Before importing
+   with a changed link base, back up Taskwarrior and update existing tasks'
+   ``jiraurl`` values to the new URLs while preserving their UUIDs. Otherwise,
+   the import can create duplicate tasks and complete the old tasks. Update
+   existing description and annotation links as needed, too.
+
+
 Specify the Query to Use for Gathering Issues
 +++++++++++++++++++++++++++++++++++++++++++++
 

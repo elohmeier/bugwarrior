@@ -4,6 +4,7 @@ import socket
 from unittest import mock
 import warnings
 
+from pydantic import ValidationError
 import pytest
 from urllib3.exceptions import InsecureRequestWarning
 
@@ -111,6 +112,50 @@ class TestJiraService:
                 ],
             },
         }
+
+    @pytest.mark.parametrize(
+        ("web_base_uri", "expected_base_uri"),
+        [
+            (None, "https://api.example.com:9994/jira"),
+            ("https://example.com", "https://example.com"),
+            ("https://example.com/jira/", "https://example.com/jira"),
+        ],
+    )
+    def test_browser_links_and_api_connection(
+        self, config, record, web_base_uri, expected_base_uri
+    ):
+        config["myservice"]["base_uri"] = "https://api.example.com:9994/jira/"
+        if web_base_uri is not None:
+            config["myservice"]["web_base_uri"] = web_base_uri
+        config["general"]["annotation_links"] = True
+        conf = validation.validate_config(
+            format_config(config), "general", "configpath"
+        )
+        client = mock.Mock()
+        client.search_issues.return_value = [mock.Mock(raw=record, key=record["key"])]
+        client.comments.return_value = []
+
+        with mock.patch("bugwarrior.services.jira.JIRA", return_value=client) as jira:
+            service = JiraService(conf.service_configs[0], conf.main)
+        jira.assert_called_once_with(
+            options={
+                "server": "https://api.example.com:9994/jira",
+                "rest_api_version": "latest",
+                "verify": True,
+            },
+            basic_auth=("milou", "t0ps3cr3t"),
+        )
+
+        issue = next(service.issues())
+        task = TaskConstructor(issue).get_taskwarrior_record()
+        expected_url = f"{expected_base_uri}/browse/{record['key']}"
+        assert task["jiraurl"] == expected_url
+        assert task["description"].endswith(f" .. {expected_url}")
+        assert task["annotations"] == [expected_url]
+
+    def test_invalid_web_base_uri(self):
+        with pytest.raises(ValidationError, match="web_base_uri"):
+            JiraService.CONFIG_SCHEMA(**SERVICE_CONFIG, web_base_uri="invalid-url")
 
     @pytest.mark.parametrize("verify_ssl", [True, False])
     def test_tls_warnings_during_connection_and_collection(self, config, verify_ssl):

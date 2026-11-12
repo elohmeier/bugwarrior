@@ -102,6 +102,7 @@ class JiraConfig(config.ServiceConfig):
     use_cookies: bool = False
     verify_ssl: bool = True
     version: int = 5
+    web_base_uri: config.StrippedTrailingSlashUrl | None = None
 
     only_if_assigned: config.UnsupportedOption[str] = ""
     also_unassigned: config.UnsupportedOption[bool] = False
@@ -316,7 +317,8 @@ class JiraIssue(Issue):
         return self.record["key"].rsplit("-", 1)[1]
 
     def get_url(self) -> str:
-        return self.config.base_uri + "/browse/" + self.record["key"]
+        base_uri = self.config.web_base_uri or self.config.base_uri
+        return base_uri + "/browse/" + self.record["key"]
 
     def get_summary(self) -> str:
         if self.config.version == 4:
