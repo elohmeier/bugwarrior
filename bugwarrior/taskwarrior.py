@@ -120,10 +120,12 @@ class TaskWarriorShellout(TaskwShellout):
         command = ["task", *self.get_configuration_override_args(), "import", "-"]
         result = subprocess.run(
             command,
-            input=json.dumps([record]),
+            # Taskwarrior mishandles escaped UTF-16 surrogate pairs. Send
+            # non-BMP characters (including emoji) as their actual UTF-8 bytes.
+            input=json.dumps([record], ensure_ascii=False),
             env={**os.environ, "TASKRC": str(self.config_filename)},
             capture_output=True,
-            text=True,
+            encoding="utf-8",
         )
         if result.returncode:
             raise TaskwarriorError(

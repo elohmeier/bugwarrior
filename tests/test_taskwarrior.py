@@ -57,7 +57,7 @@ def test_json_updates_preserve_local_fields_and_clear_dates(config_environment):
         depends=[dependency["uuid"]],
         annotations=[{"entry": "20200102T103000Z", "description": '"Original note"'}],
         due=datetime(2030, 1, 2, tzinfo=UTC),
-        customfield="literal &dquot; [value]",
+        customfield="literal &dquot; [value] 🍎",
     )
     added["description"] = '"Updated"'
     added["due"] = None
@@ -67,7 +67,7 @@ def test_json_updates_preserve_local_fields_and_clear_dates(config_environment):
     assert updated.get("due") is None
     assert updated["depends"] == [dependency["uuid"]]
     assert updated["tags"] == ["local"]
-    assert updated["customfield"] == "literal &dquot; [value]"
+    assert updated["customfield"] == "literal &dquot; [value] 🍎"
     assert updated["annotations"][0].entry == datetime(2020, 1, 2, 10, 30, tzinfo=UTC)
 
     writer.task_update({"uuid": added["uuid"], "description": "Partial update"})

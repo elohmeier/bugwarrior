@@ -25,7 +25,7 @@ lst = list
 
 def _get_section_name(flavor: str | None) -> str:
     if flavor:
-        return "flavor." + flavor
+        return flavor
     return "general"
 
 

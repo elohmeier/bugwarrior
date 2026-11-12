@@ -312,6 +312,7 @@ def test_archive_roundtrip(service, payload, config_environment, caplog):
         'trailing"',
         "literal &dquot; [brackets] \\path",
         "line\nbreak",
+        "Buy 🍎 and take 🛠️ notes",
     ],
 )
 def test_literal_title_roundtrip(service, payload, config_environment, title):

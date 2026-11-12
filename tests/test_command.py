@@ -125,6 +125,29 @@ class TestPull:
         assert "Updating 0 tasks" in logs
         assert "Closing 0 tasks" in logs
 
+    def test_flavor_selects_requested_target(self, runner, config, caplog, write_rc):
+        config["flavor.reminders"] = {"targets": "reminders"}
+        config["reminders"] = {"service": "secondary"}
+        write_rc(config)
+        with (
+            register_services(
+                {
+                    "test": fake_service(raises),
+                    "secondary": fake_service(yields_one(), base=SecondaryService),
+                }
+            ),
+            caplog.at_level(logging.INFO),
+        ):
+            result = runner.invoke(
+                command.cli,
+                args=("pull", "--flavor", "reminders", "--dry-run", "--debug"),
+            )
+        assert result.exit_code == 0
+        assert "Adding 1 tasks" in [record.message for record in caplog.records]
+        assert not [
+            record for record in caplog.records if record.levelno >= logging.ERROR
+        ]
+
     def test_failure(self, runner, config, caplog):
         """
         A broken `bugwarrior pull` invocation.
