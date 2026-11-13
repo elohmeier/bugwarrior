@@ -274,6 +274,9 @@ class Service(abc.ABC, Generic[T_Issue]):
     #: import explicit completion states or archival snapshots can opt out.
     COMPLETE_MISSING = True
 
+    def reconcile_local_tasks(self, tw: Any, *, dry_run: bool) -> None:
+        """Optional source reconciliation, enabled by source configuration."""
+
     def __init__(
         self, config: schema.ServiceConfig, main_config: schema.MainSectionConfig
     ) -> None:

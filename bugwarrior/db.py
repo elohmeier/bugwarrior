@@ -182,7 +182,15 @@ def synchronize(
     notify = conf.notifications.notifications and not dry_run
 
     tw = TaskWarriorShellout(
-        config_filename=conf.main.taskrc, config_overrides=uda_list, marshal=True
+        config_filename=conf.main.taskrc,
+        config_overrides={
+            **uda_list,
+            "hooks": "off",
+            "recurrence": "off",
+            "gc": "off",
+            "context": "",
+        },
+        marshal=True,
     )
 
     issue_updates = {"new": [], "existing": [], "changed": [], "closed": []}
@@ -254,9 +262,14 @@ def synchronize(
             if task["status"] == "completed" and not (
                 issue.get("end") or issue.get("status") in ("completed", "deleted")
             ):
-                # Reopen task
-                task["status"] = "pending"
-                task["end"] = None
+                if service_config.reopen_completed:
+                    task["status"] = "pending"
+                    task["end"] = None
+                else:
+                    # Status protection must happen before merging the source
+                    # record; static_fields alone cannot undo a local reopen.
+                    issue.pop("status", None)
+                    issue.pop("end", None)
 
             # Drop static fields from the upstream issue.  We don't want to
             # overwrite local changes to fields we declare static.
@@ -330,7 +343,13 @@ def synchronize(
         build_unique_key_sets(
             service_config.service
             for service_config in successful_config_map.values()
-            if getattr(get_service(service_config.service), "COMPLETE_MISSING", True)
+            if (
+                service_config.complete_missing
+                if service_config.complete_missing is not None
+                else getattr(
+                    get_service(service_config.service), "COMPLETE_MISSING", True
+                )
+            )
         ),
     )
     issue_updates["closed"] = list(succeeded_service_task_uuids - seen_uuids)
@@ -353,6 +372,13 @@ def synchronize(
             tw.task_done(uuid=issue)
         except TaskwarriorError as e:
             log.exception(f"Unable to close task: {e.stderr}")
+
+    # Reconcile only explicitly enabled services, after successful collection.
+    # Source implementations must keep dry runs read-only.
+    for service_config in successful_config_map.values():
+        if getattr(service_config, "sync_completion", False):
+            service = get_service(service_config.service)(service_config, conf.main)
+            service.reconcile_local_tasks(tw, dry_run=dry_run)
 
     # Send notifications
     if notify:

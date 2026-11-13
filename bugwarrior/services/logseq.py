@@ -5,12 +5,15 @@ import re
 import sys
 import typing
 from typing import Any
+from uuid import UUID
 
 from dateutil.tz import tzlocal
+from pydantic import model_validator
 import requests
 
 from bugwarrior import config
 from bugwarrior.services import Client, Issue, Service
+from bugwarrior.services.logseq_workflow import reconcile_completion, resolve_context
 
 log = logging.getLogger(__name__)
 
@@ -38,6 +41,19 @@ class LogseqConfig(config.ServiceConfig):
     inline_links: bool = True
     import_labels_as_tags: bool = False
     label_template: str = "{{label}}"
+    graph: str | None = None
+    area_projects: dict[str, str] = {}
+    sync_completion: bool = False
+
+    @model_validator(mode="after")
+    def validate_local_workflow(self) -> "LogseqConfig":
+        if self.sync_completion and (
+            self.reopen_completed or self.complete_missing is not False
+        ):
+            raise ValueError(
+                "sync_completion requires reopen_completed=false and complete_missing=false"
+            )
+        return self
 
     only_if_assigned: config.UnsupportedOption[str] = ""
     also_unassigned: config.UnsupportedOption[bool] = False
@@ -96,8 +112,14 @@ class LogseqClient(Client):
             sys.exit(1)
 
     def get_issues(self) -> Any:
+        parent = "[:db/id :block/content :block/properties]"
+        for _ in range(7):
+            parent = (
+                "[:db/id :block/content :block/properties "
+                "{:block/parent " + parent + "}]"
+            )
         query = f"""
-            [:find (pull ?b [*])
+            [:find (pull ?b [* {{:block/parent {parent}}}])
                 :where [?b :block/marker ?marker]
                 [(contains? #{{{self.filter}}} ?marker)]
             ]
@@ -110,6 +132,28 @@ class LogseqClient(Client):
             sys.exit(1)
         return result
 
+    def get_blocks(self, uuids: list[str]) -> list[dict[str, Any]]:
+        if not uuids:
+            return []
+        identifiers = " ".join(f'#uuid "{UUID(value)}"' for value in uuids)
+        query = (
+            "[:find (pull ?b [:db/id :block/uuid :block/content :block/marker]) "
+            ":where [?b :block/uuid ?u] "
+            f"[(contains? #{{{identifiers}}} ?u)]]"
+        )
+        return [row[0] for row in self._datascript_query(query)]
+
+    def update_block(self, uuid: str, content: str) -> None:
+        response = requests.post(
+            f"http://{self.host}:{self.port}/api",
+            headers=self.headers,
+            json={"method": "logseq.Editor.updateBlock", "args": [uuid, content]},
+            timeout=30,
+        )
+        result = self.json_response(response)
+        if isinstance(result, dict) and result.get("error"):
+            raise RuntimeError("Logseq rejected a completion update")
+
 
 class LogseqIssue(Issue):
     ID = "logseqid"
@@ -121,6 +165,8 @@ class LogseqIssue(Issue):
     SCHEDULED = "logseqscheduled"
     DEADLINE = "logseqdeadline"
     PAGE = "logseqpage"
+    CONTEXT = "logseqcontext"
+    PROJECT = "logseqproject"
 
     # Local 2038-01-18, with time 00:00:00.
     # A date far away, with semantically meaningful to GTD users.
@@ -137,6 +183,11 @@ class LogseqIssue(Issue):
         SCHEDULED: {"type": "date", "label": "Logseq Scheduled"},
         DEADLINE: {"type": "date", "label": "Logseq Deadline"},
         PAGE: {"type": "string", "label": "Logseq Page"},
+        CONTEXT: {"type": "string", "label": "Logseq Context"},
+        PROJECT: {"type": "string", "label": "Source Project"},
+        "waitingfor": {"type": "string", "label": "Waiting For"},
+        "outcome": {"type": "string", "label": "Outcome"},
+        "mergedinto": {"type": "string", "label": "Merged Into"},
     }
 
     UNIQUE_KEY = (ID, UUID)
@@ -299,7 +350,7 @@ class LogseqIssue(Issue):
         wait_date = min(
             d for d in [scheduled_date, deadline_date, someday] if d is not None
         )
-        return {
+        result = {
             "project": self.extra["graph"],
             "priority": self.get_priority(),
             "annotations": annotations,
@@ -317,6 +368,10 @@ class LogseqIssue(Issue):
             self.DEADLINE: deadline_date,
             self.PAGE: self.extra["page_title"],
         }
+        for field in (self.CONTEXT, self.PROJECT):
+            if self.extra.get(field):
+                result[field] = self.extra[field]
+        return result
 
     def get_default_description(self) -> str:
         return self.build_default_description(
@@ -347,10 +402,28 @@ class LogseqService(Service[LogseqIssue]):
 
     def issues(self) -> Iterator[LogseqIssue]:
         graph_name = self.client.get_graph_name()
+        if self.config.graph and graph_name != self.config.graph:
+            raise ValueError("The open Logseq graph differs from the configured graph")
+        pages = {}
+
+        def get_page(identity: Any) -> dict[str, Any]:
+            if identity not in pages:
+                pages[identity] = self.client.get_page(identity) or {}
+            return pages[identity]
+
         for issue in self.client.get_issues():
-            parent_page = self.client.get_page(issue[0]["parent"]["id"])
+            record = issue[0]
+            page = get_page(record["page"]["id"])
+            project, context = resolve_context(
+                record, page, get_page, self.config.area_projects
+            )
             extra = {
                 "graph": graph_name,
-                "page_title": parent_page["originalName"] if parent_page else None,
+                "page_title": page.get("originalName"),
+                LogseqIssue.PROJECT: project,
+                LogseqIssue.CONTEXT: context,
             }
-            yield self.get_issue_for_record(issue[0], extra)
+            yield self.get_issue_for_record(record, extra)
+
+    def reconcile_local_tasks(self, tw: Any, *, dry_run: bool) -> None:
+        reconcile_completion(self, tw, dry_run=dry_run)

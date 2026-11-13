@@ -91,6 +91,15 @@ In addition to the ``[general]`` section, sections may be named
 Common Service Configuration Options
 ------------------------------------
 
+``reopen_completed`` defaults to true. Set it to false for sources whose local
+completion decisions should survive an incoming open record. This protects the
+completed state and end date before merging; ``static_fields`` alone does not
+prevent reopening.
+
+``complete_missing`` overrides a service's completion-on-absence policy. Set it
+to false when an unavailable block, changed query or narrower selection should
+leave local tasks open. By default the service's existing policy is retained.
+
 All services support common configuration options in addition
 to their service-specific features.
 

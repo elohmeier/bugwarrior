@@ -264,6 +264,48 @@ class TestSynchronize:
         )
         assert tw.load_tasks() == before
 
+    def test_local_completion_stays_closed_when_reopening_disabled(self, bwconfig, tw):
+        bwconfig.service_configs[0] = bwconfig.service_configs[0].model_copy(
+            update={"reopen_completed": False}
+        )
+        issue = {
+            "description": "Source action",
+            "dumburl": "https://example.com/local-completion",
+            "status": "pending",
+            "tags": [],
+        }
+        self.synchronize(bwconfig, [issue])
+        task = tw.load_tasks()["pending"][0]
+        tw.task_done(uuid=task["uuid"])
+        before = tw.load_tasks()["completed"][0]
+        issue["description"] = "Updated source context"
+
+        self.synchronize(bwconfig, [issue])
+
+        tasks = tw.load_tasks()
+        assert tasks["pending"] == []
+        assert tasks["completed"][0]["uuid"] == before["uuid"]
+        assert tasks["completed"][0]["end"] == before["end"]
+        assert tasks["completed"][0]["description"] == "Updated source context"
+
+    def test_missing_task_stays_open_when_completion_on_absence_disabled(
+        self, bwconfig, tw
+    ):
+        bwconfig.service_configs[0] = bwconfig.service_configs[0].model_copy(
+            update={"complete_missing": False}
+        )
+        issue = {
+            "description": "An action outside the current source selection",
+            "dumburl": "https://example.com/selection",
+            "tags": [],
+        }
+        self.synchronize(bwconfig, [issue])
+        before = tw.load_tasks()
+
+        self.synchronize(bwconfig, [])
+
+        assert tw.load_tasks() == before
+
 
 class TestUDAs:
     def test_udas(self, config_environment):

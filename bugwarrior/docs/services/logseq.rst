@@ -58,6 +58,54 @@ the one of the authorization tokens set in Logseq HTTP APIs server settings.
     logseq.token = mybugwarrioraccesstoken
 
 
+Locally owned actions and project context
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+For a Taskwarrior-owned action workflow, the following TOML options preserve
+local planning and enable narrowly scoped completion reconciliation::
+
+    [notes]
+    service = "logseq"
+    graph = "My graph"
+    # Keep the existing token configuration.
+    sync_completion = true
+    reopen_completed = false
+    complete_missing = false
+    static_fields = ["project", "description", "due", "scheduled", "wait"]
+    project_template = "{{logseqproject or 'Inbox'}}"
+    description_template = "{{logseqtitle}}"
+    area_projects = { work = "Work", home = "Home" }
+
+The configured graph name is checked before collection and reconciliation.
+Containing pages are resolved from the block's page identity, including nested
+tasks. ``logseqcontext`` retains ancestor headings; ``logseqproject`` retains the
+source project hint independently of a curated local project.
+
+Set a ``taskwarrior-project`` page/block property for an explicit Taskwarrior
+project. Resolution prefers explicit task properties, then the nearest ancestor
+or referenced project page, then the containing page. ``area`` properties and
+recognized area references or namespaces can supply a root using ``area_projects``. Conflicting
+references remain unclassified. Existing task projects are protected by the
+example's ``static_fields``; applying new classification to existing tasks is an
+explicit migration.
+
+With ``sync_completion`` enabled, a successful pull mirrors local completion to
+the linked Logseq marker. The default is ``DONE``; ``outcome:dropped`` and
+``outcome:merged`` use ``CANCELED``. The rest of the block is preserved. Known
+blocks explicitly completed/cancelled in Logseq also close locally. Missing
+blocks are left alone. Source UUID, numeric identity, graph and content are
+checked; concurrent source edits abort the affected write. Completion is
+eventually synchronized on a pull, not by a Taskwarrior hook. Reopening a locally
+completed action remains an explicit local decision.
+
+Before source writes, private preimages are saved below
+``<task data>/logseq-writeback/``. Dry runs read the source and report counts but
+write neither source markers, snapshots nor local task changes. This mode
+requires ``reopen_completed = false`` and ``complete_missing = false``.
+
+The optional local workflow fields ``waitingfor``, ``outcome`` and ``mergedinto``
+are declared alongside the source UDAs. They are not imported from note text.
+
 Task filters
 ++++++++++++
 
@@ -181,9 +229,11 @@ Troubleshooting
 Logseq graph re-index
 +++++++++++++++++++++
 
-If you re-index your Logseq graph all task ids and uuids are changed. The next time
-you run bugwarrior all existing taskwarrior tasks will be closed and new ones will 
-be created.
+Re-indexing can change numeric block identities and UUIDs that were not persisted
+in the notes. Check the dry run before importing after a re-index. Existing
+identities must be reconciled explicitly to avoid duplicate actions. With
+``complete_missing = false``, old tasks remain open rather than being silently
+closed. Completion write-back refuses a mismatched numeric identity.
 
 Logseq API connection issues
 ++++++++++++++++++++++++++++

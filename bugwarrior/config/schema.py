@@ -214,6 +214,8 @@ class ServiceConfig(_ServiceConfig):
     default_priority: Priority = "M"
     add_tags: ConfigList = []
     static_fields: ConfigList = []
+    reopen_completed: bool = True
+    complete_missing: bool | None = None
 
     @property
     def keyring_service(self) -> str:

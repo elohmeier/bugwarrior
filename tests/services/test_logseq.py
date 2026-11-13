@@ -8,6 +8,7 @@ from bugwarrior import db
 from bugwarrior.collect import TaskConstructor
 from bugwarrior.config.validation import Config
 from bugwarrior.services.logseq import LogseqClient, LogseqIssue, LogseqService
+from bugwarrior.services.logseq_workflow import reconcile_completion
 
 SERVICE_CLASS = LogseqService
 
@@ -153,6 +154,73 @@ class TestLogseqIssue:
         actual = issue.to_taskwarrior()
 
         assert actual[issue.ID] == "7146"
+
+    def test_completion_roundtrip_preserves_local_fields(
+        self, make_service, record, extra
+    ):
+        service = make_service(
+            sync_completion=True,
+            reopen_completed=False,
+            complete_missing=False,
+            static_fields=["project", "description", "due", "scheduled", "wait"],
+        )
+        service.client = mock.Mock(spec=LogseqClient)
+        service.client.get_graph_name.return_value = extra["graph"]
+        service.client.get_blocks.side_effect = lambda _: [dict(record)]
+
+        def update_block(uuid, content):
+            assert uuid == record["uuid"]
+            record.update(content=content, marker=content.split()[0])
+
+        service.client.update_block.side_effect = update_block
+        conf = Config(service_configs=[service.config], main=service.main_config)
+        tw = db.TaskWarriorShellout(
+            config_filename=conf.main.taskrc,
+            config_overrides=db.build_uda_config_overrides(["logseq"]),
+            marshal=True,
+        )
+
+        def synchronize(dry_run=False):
+            issue = service.get_issue_for_record(record, extra)
+            db.synchronize(
+                iter([TaskConstructor(issue).get_data_to_sync()]), conf, dry_run
+            )
+
+        def reconcile(_instance, target, *, dry_run):
+            reconcile_completion(service, target, dry_run=dry_run)
+
+        with (
+            mock.patch("bugwarrior.db.TaskWarriorShellout", return_value=tw),
+            mock.patch.object(
+                LogseqService,
+                "reconcile_local_tasks",
+                autospec=True,
+                side_effect=reconcile,
+            ),
+        ):
+            synchronize()
+            task = tw.load_tasks()["pending"][0]
+            task.update({"description": "Curated action", "project": "Work.Rollout"})
+            tw.task_update(task)
+            tw.task_done(uuid=task["uuid"])
+            before = tw.load_tasks()["completed"][0]
+
+            synchronize(dry_run=True)
+            service.client.update_block.assert_not_called()
+            assert tw.load_tasks()["completed"][0]["end"] == before["end"]
+
+            synchronize()
+            closed = tw.load_tasks()["completed"][0]
+            assert tw.load_tasks()["pending"] == []
+            assert record["marker"] == "DONE"
+            assert closed["logseqstate"] == "DONE"
+            assert closed["project"] == "Work.Rollout"
+            assert closed["description"] == "Curated action"
+            assert closed["end"] == before["end"]
+            service.client.update_block.reset_mock()
+
+            synchronize()
+            service.client.update_block.assert_not_called()
 
     @pytest.mark.parametrize("local_timezone", ["UTC", "Europe/Berlin"], indirect=True)
     @pytest.mark.parametrize(
@@ -317,6 +385,11 @@ class TestLogseqIssue:
         service.client.get_issues.return_value = [[record]]
         service.client.get_page.return_value = page
         issue = next(service.issues())
+        service.client.get_page.assert_any_call(record["page"]["id"])
+        assert (
+            mock.call(record["parent"]["id"])
+            not in service.client.get_page.call_args_list
+        )
 
         expected = {
             "annotations": [],
